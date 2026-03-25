@@ -4,6 +4,7 @@
 print("All set")
 
 from controller import Robot
+import matplotlib.pyplot as plt
 import numpy as np
 import statistics
 import math
@@ -105,8 +106,6 @@ def forward(speed):
 
 # ---- Encoder reading ----
 
-initial_pose = np.array([e.getValue() for e in encoders], dtype=float)    
-print(initial_pose)
 
 def get_encoder_values():
     global initial_pose
@@ -193,21 +192,29 @@ prev_dist = 0.0
 
 def turn_to_pose(yaw_target):
     global prev_dyaw
+    global v_robot
+    global v_damped
+
     roll, pitch, yaw = get_inertial_data()
     direction = rotation_direction(yaw,yaw_target)
     dyaw = yaw_target - yaw
-    print(abs(dyaw))
 
     kp = 5.0
     kd = 0.3
     max_speed = 12
-    tolerance = 0.01
+    tolerance = 0.005
 
     derivative = dyaw - prev_dyaw
     prev_dyaw = dyaw
 
     speed = kp * abs(dyaw) + kd * abs(derivative)
     speed = np.clip(speed, -max_speed, max_speed)
+
+    if speed - v_robot > 1:
+        speed = v_damped*1.01
+        v_damped = speed
+
+    v_robot = speed
 
     if direction == -1:
         rotate_clockwise(speed)
@@ -218,15 +225,21 @@ def turn_to_pose(yaw_target):
 
     if abs(dyaw) < tolerance:
         set_motor_velocities(0,0,0,0,0,0,0,0)
+        v_damped = 0.1
         return True
 
     return False
 
 sequence = 0
+v_robot = 0
+v_damped = 0.1
 
 def nav_2_pose(x_target, y_target, theta_target):
     global sequence
     global prev_dist
+    global v_robot
+    global v_damped
+
     pos_tolerance = 0.05
 
     x, y, z = read_gps()
@@ -234,7 +247,6 @@ def nav_2_pose(x_target, y_target, theta_target):
     dx = x_target - x
     dy = y_target - y
     distance = math.sqrt(dx**2 + dy**2)
-    print(distance)
 
     if sequence == 0:
         heading_target = math.atan2(dy, dx)
@@ -243,18 +255,25 @@ def nav_2_pose(x_target, y_target, theta_target):
             sequence +=1
 
     elif sequence == 1:
-        kp = 5
-        kd = 3
+        kp = 3
+        kd = 0.5
         derivative = distance - prev_dist
         prev_dist = distance
 
         v = kp*distance + kd*derivative
         v = min(v,10)
+
+        if v - v_robot > 2:
+            v = v_damped*1.02
+            v_damped = v
+
         forward(v)
+        v_robot = v
 
         if distance <= pos_tolerance:
             forward(0)
             sequence += 1
+            v_damped = 0.1
 
     elif sequence == 2:
         A = turn_to_pose(theta_target)
@@ -265,8 +284,43 @@ def nav_2_pose(x_target, y_target, theta_target):
 
     return False
 
+
+def plot_map(x_target, y_target, yaw_target):
+    x, y, z = read_gps()
+    roll, pitch, yaw = get_inertial_data()
+
+    arrow_len = 0.5
+
+    tx = arrow_len * math.cos(yaw_target)
+    ty = arrow_len * math.sin(yaw_target)
+
+    rx = arrow_len * math.cos(yaw)
+    ry = arrow_len * math.sin(yaw)
+
+    plt.clf()
+
+    plt.scatter(x_target, y_target)
+    plt.quiver(x_target, y_target, tx, ty, angles='xy', scale_units='xy', scale=1)
+
+    plt.scatter(x, y)
+    plt.quiver(x, y, rx, ry, angles='xy', scale_units='xy', scale=1)
+
+    plt.gca().set_aspect('equal', adjustable='box')
+    plt.xlim(min(x, x_target) - 2, max(x, x_target) + 2)
+    plt.ylim(min(y, y_target) - 2, max(y, y_target) + 2)
+
+    plt.pause(0.001)
+
+    return True
+
 while robot.step(timestep) != -1:
-    A = nav_2_pose(5,5,deg2rad(-45))
+    x_target = 5
+    y_target = 5
+    yaw_target = deg2rad(-45)
+    #plot_map(x_target,y_target,yaw_target)
+
+    A = nav_2_pose(x_target,y_target,yaw_target)
     if A:
         forward(0)
+        print("TARGET REACHED")
         break
