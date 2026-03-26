@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import statistics
 import math
+import cv2
 
 robot = Robot()
 timestep = int(robot.getBasicTimeStep())
@@ -130,6 +131,51 @@ def get_inertial_data(inertial_unit=inertial_unit):
     
     return roll,pitch,yaw
 
+
+def display_lidar_map(ranges, angles,
+                      x_robot, y_robot, yaw,
+                      x_target, y_target,
+                      size=600, scale=10):
+
+    img = np.zeros((size, size, 3), dtype=np.uint8)
+
+    cx = size // 2
+    cy = size // 2
+
+    # draw lidar points
+    for r, a in zip(ranges, angles):
+        if np.isinf(r) or np.isnan(r):
+            continue
+
+        x = r * math.cos(a)
+        y = r * math.sin(a)
+
+        px = int(cx + x * scale)
+        py = int(cy - y * scale)
+
+        if 0 <= px < size and 0 <= py < size:
+            img[py, px] = (255, 0, 0)
+
+    # robot position
+    cv2.circle(img, (cx, cy), 4, (255, 255, 255), -1)
+
+    # --- convert GPS target to robot frame ---
+    dx = x_target - x_robot
+    dy = y_target - y_robot
+
+    x_local = dx * math.cos(yaw) + dy * math.sin(yaw)
+    y_local = -dx * math.sin(yaw) + dy * math.cos(yaw)
+
+    # convert to pixels
+    tx = int(cx + x_local * scale)
+    ty = int(cy - y_local * scale)
+
+    #if 0 <= tx < size and 0 <= ty < size:
+    #    cv2.circle(img, (tx, ty), 6, (0, 0, 255), -1)
+
+    cv2.imshow("LiDAR", img)
+    cv2.waitKey(1)
+
 # ---- Odometry ---
 
 wheel_radius = 0.319
@@ -211,7 +257,7 @@ def turn_to_pose(yaw_target):
     speed = np.clip(speed, -max_speed, max_speed)
 
     if speed - v_robot > 1:
-        speed = v_damped*1.01
+        speed = v_damped*1.03
         v_damped = speed
 
     v_robot = speed
@@ -244,6 +290,7 @@ def nav_2_pose(x_target, y_target, theta_target):
 
     x, y, z = read_gps()
     roll, pitch, yaw = get_inertial_data()
+    print(x,y,yaw)
     dx = x_target - x
     dy = y_target - y
     distance = math.sqrt(dx**2 + dy**2)
@@ -264,7 +311,7 @@ def nav_2_pose(x_target, y_target, theta_target):
         v = min(v,10)
 
         if v - v_robot > 2:
-            v = v_damped*1.02
+            v = v_damped*1.03
             v_damped = v
 
         forward(v)
@@ -285,41 +332,37 @@ def nav_2_pose(x_target, y_target, theta_target):
     return False
 
 
-def plot_map(x_target, y_target, yaw_target):
-    x, y, z = read_gps()
-    roll, pitch, yaw = get_inertial_data()
+def get_lidar_data():
+    global lidar
+    
+    values = lidar.getRangeImage()
+    fov = lidar.getFov()
+    resolution = lidar.getHorizontalResolution()
 
-    arrow_len = 0.5
+    angle_step = fov / resolution
+    start_angle = -fov / 2
 
-    tx = arrow_len * math.cos(yaw_target)
-    ty = arrow_len * math.sin(yaw_target)
+    ranges = []
+    angles = []
 
-    rx = arrow_len * math.cos(yaw)
-    ry = arrow_len * math.sin(yaw)
+    for i, r in enumerate(values):
+        angle = start_angle + i * angle_step
+        ranges.append(r)
+        angles.append(angle)
 
-    plt.clf()
-
-    plt.scatter(x_target, y_target)
-    plt.quiver(x_target, y_target, tx, ty, angles='xy', scale_units='xy', scale=1)
-
-    plt.scatter(x, y)
-    plt.quiver(x, y, rx, ry, angles='xy', scale_units='xy', scale=1)
-
-    plt.gca().set_aspect('equal', adjustable='box')
-    plt.xlim(min(x, x_target) - 2, max(x, x_target) + 2)
-    plt.ylim(min(y, y_target) - 2, max(y, y_target) + 2)
-
-    plt.pause(0.001)
-
-    return True
+    return ranges, angles
 
 while robot.step(timestep) != -1:
     x_target = 5
     y_target = 5
-    yaw_target = deg2rad(-45)
+    yaw_target = deg2rad(-60)
     #plot_map(x_target,y_target,yaw_target)
+    x, y, z = read_gps()
+    roll, pitch, yaw = get_inertial_data()
+    ranges, angles = get_lidar_data()
+    display_lidar_map(ranges, angles, x,y,yaw,x_target,y_target)
 
-    A = nav_2_pose(x_target,y_target,yaw_target)
+    A = nav_2_pose(x_target,y_target,yaw_target,)
     if A:
         forward(0)
         print("TARGET REACHED")
